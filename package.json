@@ -1,0 +1,33 @@
+{
+  "name": "superdesk",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=web",
+    "dev:gateway": "npm run dev --workspace=gateway",
+    "dev:worker": "npm run dev --workspace=worker",
+    "build": "npm run build --workspace=@superdesk/db && npm run build --workspace=web",
+    "build:widget": "npm run build --workspace=widget",
+    "db:generate": "npm run generate --workspace=@superdesk/db",
+    "db:push": "npm run push --workspace=@superdesk/db",
+    "db:migrate": "npm run migrate --workspace=@superdesk/db",
+    "db:studio": "npm run studio --workspace=@superdesk/db",
+    "db:seed": "npm run seed --workspace=@superdesk/db",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "allowScripts": {
+    "prisma@6.19.3": true,
+    "@prisma/client@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "esbuild@0.28.2": true,
+    "unrs-resolver@1.12.2": true
+  }
+}

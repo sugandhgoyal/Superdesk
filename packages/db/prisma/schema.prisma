@@ -1,0 +1,404 @@
+// SuperDesk — multi-tenant customer communication platform.
+//
+// Tenancy model: every business row carries `workspaceId`. Nothing is queried
+// without it; the data-access layer in packages/db/src/tenant.ts makes that
+// structural rather than a convention people remember to follow.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  // Pooled connection (PgBouncer on Neon) for serverless request handlers.
+  url      = env("DATABASE_URL")
+  // Unpooled connection — migrations need session-level state that a
+  // transaction pooler will not give them.
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Role {
+  ADMIN
+  AGENT
+}
+
+enum Channel {
+  CHAT
+  EMAIL
+}
+
+enum ConversationStatus {
+  OPEN
+  SNOOZED
+  RESOLVED
+}
+
+enum SenderType {
+  CONTACT // the end user
+  AGENT // a human teammate
+  SYSTEM // "Assigned to X", "Resolved by Y"
+  AI // AI-generated content that was actually sent
+}
+
+enum ArticleStatus {
+  DRAFT
+  PUBLISHED
+}
+
+enum DomainStatus {
+  PENDING // record created, DNS not yet pointed
+  VERIFYING // CNAME seen, waiting on cert issuance
+  ACTIVE // serving traffic over TLS
+  FAILED
+}
+
+// ---------------------------------------------------------------------------
+// Tenancy + identity
+// ---------------------------------------------------------------------------
+
+model Workspace {
+  id   String @id @default(cuid())
+  name String
+  slug String @unique // acme -> acme.superdesk.app
+
+  // Local part of the inbound support address: <inboundAlias>@<INBOUND_EMAIL_DOMAIN>.
+  // Separate from `slug` so a workspace can rename without breaking live threads.
+  inboundAlias String @unique
+
+  // Origins allowed to boot the widget. Empty = allow any (dev convenience,
+  // warned about in the dashboard).
+  widgetAllowedOrigins String[] @default([])
+
+  // Knowledge base
+  kbEnabled     Boolean @default(true)
+  kbTitle       String?
+  kbDescription String?
+
+  // Custom domain for the public KB (Req 7)
+  customDomain           String?      @unique
+  customDomainStatus     DomainStatus @default(PENDING)
+  customDomainVerifiedAt DateTime?
+  customDomainLastError  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships     Membership[]
+  invites         Invite[]
+  contacts        Contact[]
+  conversations   Conversation[]
+  messages        Message[]
+  sections        Section[]
+  articles        Article[]
+  cannedResponses CannedResponse[]
+  inboundEmails   InboundEmailLog[]
+
+  @@index([customDomain])
+}
+
+model User {
+  id           String  @id @default(cuid())
+  email        String  @unique
+  passwordHash String
+  name         String
+  avatarUrl    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships   Membership[]
+  sentInvites   Invite[]       @relation("InvitedBy")
+  assigned      Conversation[] @relation("Assignee")
+  messages      Message[]      @relation("MessageAuthor")
+  authoredPosts Article[]      @relation("ArticleAuthor")
+}
+
+model Membership {
+  id          String    @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        Role      @default(AGENT)
+  lastSeenAt  DateTime?
+
+  createdAt DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId])
+}
+
+model Invite {
+  id          String    @id @default(cuid())
+  workspaceId String
+  email       String
+  role        Role      @default(AGENT)
+  token       String    @unique
+  invitedById String?
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+
+  createdAt DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy User?     @relation("InvitedBy", fields: [invitedById], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, email])
+  @@index([workspaceId])
+}
+
+// ---------------------------------------------------------------------------
+// People we talk to
+// ---------------------------------------------------------------------------
+
+model Contact {
+  id          String  @id @default(cuid())
+  workspaceId String
+  email       String?
+  name        String?
+
+  // Stable anonymous identifier issued to a browser by the widget, so an
+  // unauthenticated visitor still gets their history back on return.
+  visitorId String?
+
+  lastSeenAt DateTime @default(now())
+  metadata   Json     @default("{}") // page URL, user agent, custom traits
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+
+  @@unique([workspaceId, email])
+  @@unique([workspaceId, visitorId])
+  @@index([workspaceId, lastSeenAt])
+}
+
+// ---------------------------------------------------------------------------
+// Conversations + messages
+// ---------------------------------------------------------------------------
+
+model Conversation {
+  id          String             @id @default(cuid())
+  workspaceId String
+  contactId   String
+  channel     Channel
+  status      ConversationStatus @default(OPEN)
+  assigneeId  String?
+  subject     String?
+
+  // Monotonic per-conversation message counter. Assigned inside the same
+  // transaction as the message insert, which is what gives clients a total
+  // order they can gap-detect against after a reconnect.
+  msgSeq Int @default(0)
+
+  snoozedUntil    DateTime?
+  lastMessageAt   DateTime  @default(now())
+  firstResponseAt DateTime? // for SLA / analytics
+  resolvedAt      DateTime?
+
+  // Fallback threading key for mail clients that drop References headers:
+  // sha256(normalized subject + contact email).
+  emailThreadKey String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contact   Contact              @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  assignee  User?                @relation("Assignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  messages  Message[]
+  readState ReadState[]
+  summary   ConversationSummary?
+
+  @@index([workspaceId, status, lastMessageAt(sort: Desc)])
+  @@index([workspaceId, assigneeId, status])
+  @@index([workspaceId, channel, status])
+  @@index([workspaceId, emailThreadKey])
+  @@index([status, snoozedUntil]) // snooze wake-up sweep
+}
+
+model Message {
+  id             String @id @default(cuid())
+  conversationId String
+  workspaceId    String
+  seq            Int
+
+  senderType      SenderType
+  senderUserId    String? // set when senderType = AGENT
+  senderContactId String? // set when senderType = CONTACT
+
+  bodyHtml String
+  bodyText String
+
+  // Internal note: visible to agents, never delivered to the contact.
+  isPrivateNote Boolean @default(false)
+
+  // Client-generated UUID. Makes retries after a socket drop idempotent and
+  // lets the sender reconcile its optimistic bubble with the server's row.
+  clientMsgId String?
+
+  // Email threading headers (RFC 5322)
+  emailMessageId  String? @unique
+  emailInReplyTo  String?
+  emailReferences String?
+
+  attachments Json @default("[]")
+
+  createdAt DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  senderUser   User?        @relation("MessageAuthor", fields: [senderUserId], references: [id], onDelete: SetNull)
+
+  @@unique([conversationId, seq])
+  @@unique([conversationId, clientMsgId])
+  @@index([conversationId, seq])
+  @@index([workspaceId, createdAt])
+  @@index([emailInReplyTo])
+}
+
+// Per-participant read cursor. `participantKey` is "user:<id>" or
+// "contact:<id>" so agents and contacts share one table.
+model ReadState {
+  id             String   @id @default(cuid())
+  conversationId String
+  participantKey String
+  lastReadSeq    Int      @default(0)
+  updatedAt      DateTime @updatedAt
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, participantKey])
+}
+
+// ---------------------------------------------------------------------------
+// AI
+// ---------------------------------------------------------------------------
+
+model ConversationSummary {
+  id             String @id @default(cuid())
+  conversationId String @unique
+
+  // { whatUserWants, whatsBeenTried, currentStatus, sentiment, suggestedNextStep }
+  summary Json
+
+  // Highest message seq folded into this summary. Incremental summarization
+  // means we only ever send the delta plus the previous summary to the model,
+  // so cost stays flat as a thread grows.
+  upToSeq Int
+
+  model       String
+  inputTokens Int?
+  degraded    Boolean @default(false) // true when produced by the extractive fallback
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge base
+// ---------------------------------------------------------------------------
+
+model Section {
+  id          String  @id @default(cuid())
+  workspaceId String
+  name        String
+  slug        String
+  description String?
+  position    Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  articles  Article[]
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId, position])
+}
+
+model Article {
+  id          String  @id @default(cuid())
+  workspaceId String
+  sectionId   String?
+  title       String
+  slug        String
+  excerpt     String?
+
+  bodyHtml String // sanitized on write
+  bodyText String // plain text mirror, used for search + AI context
+
+  status      ArticleStatus @default(DRAFT)
+  publishedAt DateTime?
+  authorId    String?
+  viewCount   Int           @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  section   Section?  @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  author    User?     @relation("ArticleAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId, status])
+  @@index([sectionId])
+}
+
+// ---------------------------------------------------------------------------
+// Agent productivity
+// ---------------------------------------------------------------------------
+
+model CannedResponse {
+  id          String   @id @default(cuid())
+  workspaceId String
+  title       String
+  shortcut    String // typed as /shortcut in the composer
+  bodyHtml    String
+  tags        String[] @default([])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, shortcut])
+}
+
+// ---------------------------------------------------------------------------
+// Email plumbing
+// ---------------------------------------------------------------------------
+
+// Idempotency + audit for inbound mail. Providers retry aggressively; without
+// this a retried webhook would post the same customer message twice.
+model InboundEmailLog {
+  id                String  @id @default(cuid())
+  workspaceId       String?
+  providerMessageId String  @unique
+  fromAddress       String
+  toAddress         String
+  subject           String?
+  messageIdHeader   String?
+  inReplyToHeader   String?
+
+  status         String // received | processed | rejected | error
+  rejectedReason String?
+  conversationId String?
+  rawSize        Int?
+
+  createdAt DateTime @default(now())
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+}
