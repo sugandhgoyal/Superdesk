@@ -112,10 +112,37 @@ model User {
   updatedAt DateTime @updatedAt
 
   memberships   Membership[]
+  sessions      Session[]
   sentInvites   Invite[]       @relation("InvitedBy")
   assigned      Conversation[] @relation("Assignee")
   messages      Message[]      @relation("MessageAuthor")
   authoredPosts Article[]      @relation("ArticleAuthor")
+}
+
+/**
+ * Server-side session records.
+ *
+ * The cookie holds a signed JWT carrying this row's id. Middleware verifies
+ * the signature only (cheap, edge-safe, no database round trip), while
+ * mutating routes revalidate the row — which is what makes "log out
+ * everywhere" and immediate access revocation actually work. A pure stateless
+ * JWT cannot be revoked before it expires.
+ */
+model Session {
+  id         String   @id @default(cuid())
+  userId     String
+  userAgent  String?
+  ip         String?
+  expiresAt  DateTime
+  lastUsedAt DateTime @default(now())
+  revokedAt  DateTime?
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 model Membership {

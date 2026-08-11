@@ -1,26 +1,116 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/*
+ * Design tokens.
+ *
+ * Everything is expressed as a semantic variable (surface, border, muted)
+ * rather than a raw colour, so dark mode is one block of overrides instead of
+ * a `dark:` prefix on every element in the app.
+ */
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+:root {
+  --bg: #ffffff;
+  --bg-subtle: #f7f8fa;
+  --bg-inset: #f1f2f5;
+  --surface: #ffffff;
+  --border: #e3e5ea;
+  --border-strong: #cdd1d9;
+  --fg: #14161a;
+  --fg-muted: #5f6673;
+  --fg-subtle: #8b93a1;
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-fg: #ffffff;
+  --accent-subtle: #eef2ff;
+  --success: #12805c;
+  --warning: #b45309;
+  --danger: #d33a3a;
+  --danger-subtle: #fef2f2;
+  --shadow-sm: 0 1px 2px rgb(16 18 22 / 0.06);
+  --shadow-md: 0 4px 16px -2px rgb(16 18 22 / 0.1);
+  --shadow-lg: 0 12px 32px -8px rgb(16 18 22 / 0.18);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --bg: #0d0f12;
+    --bg-subtle: #131519;
+    --bg-inset: #1a1d22;
+    --surface: #16191d;
+    --border: #262a31;
+    --border-strong: #363b44;
+    --fg: #eceef2;
+    --fg-muted: #9aa2b1;
+    --fg-subtle: #6b7382;
+    --accent: #7c72f0;
+    --accent-hover: #8f86f5;
+    --accent-fg: #0d0f12;
+    --accent-subtle: #1e1b3a;
+    --success: #35c99a;
+    --warning: #e0a03a;
+    --danger: #f0716f;
+    --danger-subtle: #2a1618;
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow-md: 0 4px 16px -2px rgb(0 0 0 / 0.5);
+    --shadow-lg: 0 12px 32px -8px rgb(0 0 0 / 0.6);
   }
 }
 
+@theme inline {
+  --color-bg: var(--bg);
+  --color-bg-subtle: var(--bg-subtle);
+  --color-bg-inset: var(--bg-inset);
+  --color-surface: var(--surface);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-subtle: var(--accent-subtle);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-danger-subtle: var(--danger-subtle);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
+* {
+  border-color: var(--border);
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Visible focus for keyboard users, suppressed for mouse clicks. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+/* Scrollbars that don't fight the dark theme. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

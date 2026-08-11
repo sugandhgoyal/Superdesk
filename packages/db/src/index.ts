@@ -1,6 +1,12 @@
 import { PrismaClient } from '../generated/client';
 
-export * from '../generated/client';
+// Types are erased at compile time, so re-exporting them wholesale is free.
+export type * from '../generated/client';
+
+// Values are re-exported by name. A blanket `export *` from Prisma's CommonJS
+// output forces the bundler to emit runtime interop shims and warn on every
+// build; naming them avoids that entirely.
+export { Prisma, PrismaClient } from '../generated/client';
 
 /**
  * Single Prisma instance per process.

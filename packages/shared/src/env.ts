@@ -14,11 +14,31 @@ import { z } from 'zod';
 const nonEmpty = z.string().min(1);
 const secret = z.string().min(16, 'secrets must be at least 16 characters');
 
+/**
+ * An unconfigured integration.
+ *
+ * `.env` files can't express "absent" — a key someone hasn't filled in yet is
+ * an empty string, not undefined. Treating "" as undefined is what lets the
+ * feature gates below work: an empty ANTHROPIC_API_KEY disables the AI panel
+ * instead of crashing the whole app at boot.
+ */
+const optionalString = z.preprocess(
+  (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+  z.string().min(1).optional(),
+);
+
 const coreSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   DATABASE_URL: nonEmpty,
-  DIRECT_URL: nonEmpty.optional(),
+  DIRECT_URL: optionalString,
+  // TCP Redis — used by the gateway (Socket.IO adapter) and worker (BullMQ),
+  // both long-lived processes that can hold a connection open.
   REDIS_URL: nonEmpty,
+  // HTTP Redis — used by serverless request handlers for rate limiting. A
+  // TCP pool per lambda invocation exhausts Upstash's connection limit under
+  // any real traffic; the REST client is stateless and doesn't.
+  UPSTASH_REDIS_REST_URL: optionalString,
+  UPSTASH_REDIS_REST_TOKEN: optionalString,
   AUTH_SECRET: secret,
   WIDGET_TOKEN_SECRET: secret,
   GATEWAY_INTERNAL_SECRET: secret,
@@ -27,31 +47,31 @@ const coreSchema = z.object({
 });
 
 const aiSchema = z.object({
-  ANTHROPIC_API_KEY: nonEmpty.optional(),
+  ANTHROPIC_API_KEY: optionalString,
   AI_MODEL: z.string().default('claude-sonnet-5'),
   AI_SUMMARY_HOURLY_LIMIT: z.coerce.number().int().positive().default(60),
 });
 
 const emailSchema = z.object({
   EMAIL_PROVIDER: z.enum(['resend', 'mailgun', 'console']).default('console'),
-  RESEND_API_KEY: z.string().optional(),
-  MAILGUN_API_KEY: z.string().optional(),
-  MAILGUN_SIGNING_KEY: z.string().optional(),
+  RESEND_API_KEY: optionalString,
+  MAILGUN_API_KEY: optionalString,
+  MAILGUN_SIGNING_KEY: optionalString,
   OUTBOUND_EMAIL_DOMAIN: z.string().default('localhost'),
   INBOUND_EMAIL_DOMAIN: z.string().default('localhost'),
-  INBOUND_WEBHOOK_SECRET: z.string().optional(),
+  INBOUND_WEBHOOK_SECRET: optionalString,
 });
 
 const domainsSchema = z.object({
-  VERCEL_API_TOKEN: z.string().optional(),
-  VERCEL_PROJECT_ID: z.string().optional(),
-  VERCEL_TEAM_ID: z.string().optional(),
+  VERCEL_API_TOKEN: optionalString,
+  VERCEL_PROJECT_ID: optionalString,
+  VERCEL_TEAM_ID: optionalString,
 });
 
 const serverSchema = coreSchema
-  .merge(aiSchema)
-  .merge(emailSchema)
-  .merge(domainsSchema);
+  .extend(aiSchema.shape)
+  .extend(emailSchema.shape)
+  .extend(domainsSchema.shape);
 
 export type ServerEnv = z.infer<typeof serverSchema>;
 

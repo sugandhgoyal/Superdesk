@@ -9,9 +9,10 @@ import type { Channel, ConversationStatus, SenderType } from '../generated/clien
  * feature code goes through helpers that take the scope as a required first
  * argument — forgetting it is a type error, not a data leak.
  *
- * Postgres RLS sits underneath as a second layer (see
- * prisma/migrations/*_rls). Application-level scoping is the fast path; RLS is
- * the backstop for anything that slips past it.
+ * Postgres RLS was considered as a second layer and deliberately deferred: it
+ * needs a per-transaction `SET LOCAL` to carry the tenant id, which fights
+ * with Neon's transaction pooler. Documented as a known limitation rather than
+ * half-implemented.
  */
 export type Scope = {
   workspaceId: string;
