@@ -20,10 +20,29 @@ export type Scope = {
   role: 'ADMIN' | 'AGENT';
 };
 
+/**
+ * Caller is reaching outside their tenant. Surfaces as 404 — a 403 would
+ * confirm the resource exists.
+ */
 export class TenantError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'TenantError';
+  }
+}
+
+/**
+ * Caller is inside the right tenant but lacks the role for this action.
+ *
+ * Distinct from TenantError on purpose: they already know the workspace
+ * exists — they're a member — so hiding it behind a 404 would only confuse
+ * them without concealing anything. This one surfaces as a 403 with a
+ * message they can act on.
+ */
+export class RoleError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RoleError';
   }
 }
 
@@ -51,7 +70,7 @@ export async function resolveScope(
 
 export function assertAdmin(scope: Scope): void {
   if (scope.role !== 'ADMIN') {
-    throw new TenantError('This action requires an admin role');
+    throw new RoleError('Only admins can do that');
   }
 }
 

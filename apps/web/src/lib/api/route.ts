@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { serverEnv } from '@superdesk/shared/env';
 import { AppError, isAppError } from '@superdesk/shared/errors';
 import { Logger, logger, newRequestId } from '@superdesk/shared/logger';
-import { TenantError } from '@superdesk/db/tenant';
+import { RoleError, TenantError } from '@superdesk/db/tenant';
 import { getCurrentUser, type AuthedUser } from '@/lib/auth/session';
 import { rateLimit } from '@/lib/ratelimit';
 
@@ -211,6 +211,13 @@ function handleError(
   if (err instanceof TenantError) {
     log.warn('Tenant boundary rejection', { durationMs, reason: err.message });
     return errorResponse('NOT_FOUND', 404, 'Not found', requestId);
+  }
+
+  // Insufficient role *within* a workspace the caller belongs to. Nothing is
+  // concealed by a 404 here, so give them something actionable.
+  if (err instanceof RoleError) {
+    log.warn('Role check rejected', { durationMs, reason: err.message });
+    return errorResponse('FORBIDDEN', 403, err.message, requestId);
   }
 
   if (isAppError(err)) {

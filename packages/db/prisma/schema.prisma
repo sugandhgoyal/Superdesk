@@ -162,14 +162,21 @@ model Membership {
 }
 
 model Invite {
-  id          String    @id @default(cuid())
+  id          String @id @default(cuid())
   workspaceId String
   email       String
-  role        Role      @default(AGENT)
-  token       String    @unique
+  role        Role   @default(AGENT)
+
+  // SHA-256 of the token, never the token itself. The raw value exists only in
+  // the invite link we hand out — a database dump therefore doesn't let anyone
+  // mint themselves a membership. Same reasoning as password hashing, and
+  // cheap to do since we look invites up by exact match.
+  tokenHash String @unique
+
   invitedById String?
   expiresAt   DateTime
   acceptedAt  DateTime?
+  revokedAt   DateTime?
 
   createdAt DateTime @default(now())
 
