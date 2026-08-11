@@ -14,7 +14,7 @@ import { SESSION_COOKIE, verifySessionToken } from '@/lib/auth/token';
  * Treating this as the only auth check would be a real vulnerability. It's a
  * redirect optimisation, not the security boundary.
  */
-export async function proxy(req: NextRequest) {
+export async function middleware(req: NextRequest) {
   const token = req.cookies.get(SESSION_COOKIE)?.value;
   const secret = process.env.AUTH_SECRET;
 

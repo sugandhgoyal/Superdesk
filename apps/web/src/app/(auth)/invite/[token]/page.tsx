@@ -43,7 +43,7 @@ export default async function InvitePage({
           Join {preview.workspaceName}
         </h1>
         <p className="mt-1 text-sm text-fg-muted">
-          You've been invited as {preview.role === 'ADMIN' ? 'an admin' : 'an agent'}.
+          You&apos;ve been invited as {preview.role === 'ADMIN' ? 'an admin' : 'an agent'}.
         </p>
       </div>
 
