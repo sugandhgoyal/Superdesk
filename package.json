@@ -8,15 +8,12 @@
   ],
   "scripts": {
     "dev": "npm run dev --workspace=web",
-    "dev:gateway": "npm run dev --workspace=gateway",
-    "dev:worker": "npm run dev --workspace=worker",
     "build": "npm run build --workspace=@superdesk/db && npm run build --workspace=web",
-    "build:widget": "npm run build --workspace=widget",
     "db:generate": "npm run generate --workspace=@superdesk/db",
     "db:push": "npm run push --workspace=@superdesk/db",
     "db:migrate": "npm run migrate --workspace=@superdesk/db",
     "db:studio": "npm run studio --workspace=@superdesk/db",
-    "db:seed": "npm run seed --workspace=@superdesk/db",
+    "seed:demo": "node scripts/seed-demo.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present"
   },

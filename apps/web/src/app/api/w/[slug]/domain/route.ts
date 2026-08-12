@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { defineRoute } from '@/lib/api/route';
 import { scopeFromSlug } from '@/lib/api/scope';
 import { getDomainInfo, removeCustomDomain, requestCustomDomain } from '@/lib/domains';
+import { LIMITS } from '@/lib/ratelimit';
 
 export const runtime = 'nodejs';
 
@@ -17,6 +18,7 @@ type Body = z.infer<typeof bodySchema>;
 
 export const POST = defineRoute<Body>({
   body: bodySchema,
+  rateLimit: { limit: 10, windowSeconds: 3600, bucket: 'domain-add' },
   handler: async ({ user, body, params, log }) => {
     const scope = await scopeFromSlug(user.id, params.slug);
     const result = await requestCustomDomain(scope, body.domain);
