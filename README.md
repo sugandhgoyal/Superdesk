@@ -2,8 +2,7 @@
 
 A unified customer-communication platform — live chat, email, and a
 searchable help center feeding one inbox, with AI summaries and per-workspace
-custom domains. Built as a 48-hour take-home; this README doubles as the
-submission write-up.
+custom domains.
 
 **Live:** https://superdesk-one.vercel.app
 **Repo:** https://github.com/sugandhgoyal/Superdesk
