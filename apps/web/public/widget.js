@@ -48,9 +48,13 @@
   ].join(';');
   bubble.appendChild(badge);
 
+  // No `src` yet — set on first open, not at mount. An iframe loads its
+  // content the instant it's in the DOM regardless of display:none, so
+  // setting src eagerly here would call /api/widget/session (creating a
+  // Contact + Conversation row) for every single page view, not just the
+  // visitors who actually open the chat.
   var iframe = document.createElement('iframe');
   iframe.title = 'Chat';
-  iframe.src = origin + '/widget/' + encodeURIComponent(slug);
   iframe.style.cssText = [
     'position:fixed', 'border:none', 'border-radius:16px',
     'box-shadow:0 12px 32px rgba(0,0,0,.24)', 'z-index:' + Z,
@@ -74,8 +78,13 @@
   }
 
   var open = false;
+  var loaded = false;
   function setOpen(next) {
     open = next;
+    if (open && !loaded) {
+      loaded = true;
+      iframe.src = origin + '/widget/' + encodeURIComponent(slug);
+    }
     layout();
     iframe.style.display = open ? 'block' : 'none';
     bubble.style.display = open && window.innerWidth <= 480 ? 'none' : 'flex';
