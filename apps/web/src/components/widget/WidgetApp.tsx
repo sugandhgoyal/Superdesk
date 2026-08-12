@@ -13,6 +13,13 @@ type SessionResponse = {
   messages: MessageItem[];
 };
 
+type ArticleSuggestion = {
+  id: string;
+  title: string;
+  slug: string;
+  excerpt: string | null;
+};
+
 function visitorIdKey(workspaceSlug: string): string {
   return `sd_visitor_${workspaceSlug}`;
 }
@@ -33,9 +40,32 @@ export function WidgetApp({ workspaceSlug }: { workspaceSlug: string }) {
 
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+  const [suggestions, setSuggestions] = useState<ArticleSuggestion[]>([]);
 
   const listRef = useRef<HTMLUListElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+
+  // Suggests help articles as the visitor types, before they even send —
+  // the same "maybe this already answers it" moment a real support widget
+  // uses to deflect a question that doesn't need a human at all.
+  useEffect(() => {
+    const query = text.trim();
+    if (query.length < 3) {
+      setSuggestions([]);
+      return;
+    }
+    const t = setTimeout(async () => {
+      try {
+        const res = await api<{ results: ArticleSuggestion[] }>(
+          `/api/help/${workspaceSlug}/search?q=${encodeURIComponent(query)}`,
+        );
+        setSuggestions(res.results.slice(0, 3));
+      } catch {
+        // Suggestions are a nicety — a failed lookup just shows none.
+      }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [text, workspaceSlug]);
 
   // Boot: resolve (or create) the visitor's identity and their one
   // continuous thread with this workspace, then open the live stream.
@@ -201,6 +231,26 @@ export function WidgetApp({ workspaceSlug }: { workspaceSlug: string }) {
           );
         })}
       </ul>
+
+      {suggestions.length > 0 && (
+        <div className="border-t border-border px-3 py-2">
+          <p className="mb-1.5 text-xs font-medium text-fg-subtle">Might already answer this:</p>
+          <div className="space-y-1">
+            {suggestions.map((s) => (
+              <a
+                key={s.id}
+                href={`/help/${workspaceSlug}/${s.slug}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block rounded-lg border border-border px-3 py-2 hover:bg-bg-subtle"
+              >
+                <p className="text-sm font-medium text-accent">{s.title}</p>
+                {s.excerpt && <p className="truncate text-xs text-fg-subtle">{s.excerpt}</p>}
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
 
       {error && <p className="px-3 pb-1 text-xs text-danger">{error}</p>}
 

@@ -369,8 +369,9 @@ model Article {
   slug        String
   excerpt     String?
 
-  bodyHtml String // sanitized on write
-  bodyText String // plain text mirror, used for search + AI context
+  bodyMarkdown String? // authoring source; bodyHtml/bodyText are derived from this on save
+  bodyHtml     String // sanitized on write
+  bodyText     String // plain text mirror, used for search + AI context
 
   status      ArticleStatus @default(DRAFT)
   publishedAt DateTime?

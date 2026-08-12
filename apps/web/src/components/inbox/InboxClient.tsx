@@ -213,7 +213,7 @@ export function InboxClient({
   }
 
   return (
-    <div className="flex h-[calc(100vh-0px)] min-h-0 flex-1">
+    <div className="flex h-full min-h-0 flex-1">
       <div className="flex w-[340px] shrink-0 flex-col border-r border-border">
         <div className="flex items-center justify-between gap-2 border-b border-border p-3">
           <h1 className="text-base font-semibold text-fg">Inbox</h1>
