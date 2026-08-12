@@ -1,7 +1,8 @@
-import { serverEnv } from '@superdesk/shared/env';
 import { requireWorkspace } from '@/lib/workspace-context';
-import { supportAddress } from '@/lib/workspace';
-import { Badge, Card } from '@/components/ui';
+import { listMembers } from '@/lib/members';
+import { listConversations } from '@/lib/conversations';
+import { InboxClient } from '@/components/inbox/InboxClient';
+import type { ConversationListResponse, MemberOption } from '@/lib/types/inbox';
 
 export default async function InboxPage({
   params,
@@ -11,28 +12,25 @@ export default async function InboxPage({
   const { slug } = await params;
   const { workspace, user, scope } = await requireWorkspace(slug);
 
-  return (
-    <div className="mx-auto max-w-3xl p-6">
-      <div className="mb-6 flex items-center gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">Inbox</h1>
-        <Badge tone="accent">{scope.role}</Badge>
-      </div>
+  const [members, initialList] = await Promise.all([
+    listMembers(scope),
+    listConversations(scope, { status: 'OPEN' }),
+  ]);
 
-      <Card className="p-5">
-        <p className="text-sm text-fg-muted">
-          Signed in as <span className="text-fg">{user.email}</span> in{' '}
-          <span className="text-fg">{workspace.name}</span>.
-        </p>
-        <p className="mt-3 text-sm text-fg-muted">
-          Support address:{' '}
-          <code className="rounded bg-bg-inset px-1.5 py-0.5 font-mono text-xs text-fg">
-            {supportAddress(
-              workspace.inboundAlias,
-              serverEnv().INBOUND_EMAIL_DOMAIN,
-            )}
-          </code>
-        </p>
-      </Card>
-    </div>
+  // Server components hand Prisma's Date objects to the client tree as-is;
+  // the inbox components expect the same ISO-string shape the JSON API
+  // returns (they're also fed by client-side fetches, which never see a Date
+  // instance). Round-tripping through JSON here keeps both paths honest
+  // about what they're rendering.
+  const serializedList = JSON.parse(JSON.stringify(initialList)) as ConversationListResponse;
+  const memberOptions = members as MemberOption[];
+
+  return (
+    <InboxClient
+      workspaceSlug={workspace.slug}
+      currentUserId={user.id}
+      members={memberOptions}
+      initialList={serializedList}
+    />
   );
 }
