@@ -8,7 +8,9 @@ import {
   type Scope,
 } from '@superdesk/db/tenant';
 import { AppError } from '@superdesk/shared/errors';
+import { logger } from '@superdesk/shared/logger';
 import { escapeHtml } from '@/lib/sanitize';
+import { sendReplyEmail } from '@/lib/email/outbound';
 
 /**
  * Conversation management — the unified inbox's read and write paths.
@@ -339,11 +341,67 @@ export async function sendMessage(
   conversationId: string,
   input: SendMessageInput,
 ) {
-  await requireConversation(scope, conversationId);
+  const conversation = await prisma.conversation.findFirst({
+    where: { id: conversationId, workspaceId: scope.workspaceId },
+    select: {
+      channel: true,
+      subject: true,
+      contact: { select: { email: true } },
+    },
+  });
+  if (!conversation) throw new TenantError('Conversation not found');
 
   const bodyText = input.bodyText.trim();
   if (!bodyText) throw new AppError('BAD_REQUEST', 'Message cannot be empty');
   if (bodyText.length > 20_000) throw new AppError('BAD_REQUEST', 'Message is too long');
+
+  // A private note never leaves the building — not into the widget (see
+  // lib/widget/session.ts) and not into an outbound email either.
+  const isPrivateNote = input.isPrivateNote ?? false;
+  let emailThreading: { messageId?: string; inReplyTo?: string; references?: string } = {};
+
+  if (conversation.channel === 'EMAIL' && !isPrivateNote && conversation.contact.email) {
+    const [workspace, priorEmailMessages] = await Promise.all([
+      prisma.workspace.findUniqueOrThrow({
+        where: { id: scope.workspaceId },
+        select: { name: true, inboundAlias: true },
+      }),
+      prisma.message.findMany({
+        where: { conversationId, emailMessageId: { not: null } },
+        orderBy: { seq: 'asc' },
+        select: { emailMessageId: true },
+      }),
+    ]);
+    const references = priorEmailMessages
+      .map((m) => m.emailMessageId)
+      .filter((id): id is string => Boolean(id));
+
+    try {
+      const sent = await sendReplyEmail({
+        workspaceName: workspace.name,
+        inboundAlias: workspace.inboundAlias,
+        toEmail: conversation.contact.email,
+        subject: conversation.subject ? `Re: ${conversation.subject}` : 'Re: your message',
+        bodyHtml: textToSafeHtml(bodyText),
+        bodyText,
+        inReplyTo: references.at(-1),
+        references,
+      });
+      emailThreading = {
+        messageId: sent.messageId,
+        inReplyTo: references.at(-1),
+        references: sent.references || undefined,
+      };
+    } catch (err) {
+      // The reply still gets saved below even if delivery had a hiccup — an
+      // agent seeing their note vanish because the email provider blipped is
+      // worse than a reply that's briefly send-pending. The missing
+      // emailMessageId just means this particular message won't itself be
+      // resolvable as an In-Reply-To target later, which is a narrow,
+      // self-correcting gap (the next successful send re-establishes it).
+      logger.error('Outbound reply email failed to send', err, { conversationId });
+    }
+  }
 
   const result = await appendMessage({
     conversationId,
@@ -352,8 +410,11 @@ export async function sendMessage(
     senderUserId: scope.userId,
     bodyHtml: textToSafeHtml(bodyText),
     bodyText,
-    isPrivateNote: input.isPrivateNote ?? false,
+    isPrivateNote,
     clientMsgId: input.clientMsgId ?? null,
+    emailMessageId: emailThreading.messageId ?? null,
+    emailInReplyTo: emailThreading.inReplyTo ?? null,
+    emailReferences: emailThreading.references ?? null,
   });
 
   // The author has, by definition, seen everything up to and including their
@@ -398,16 +459,42 @@ export async function startConversation(scope: Scope, input: StartConversationIn
     select: { id: true },
   });
 
+  const subject = input.subject?.trim() || 'Following up';
+
   const conversation = await prisma.conversation.create({
     data: {
       workspaceId: scope.workspaceId,
       contactId: contact.id,
       channel: 'EMAIL',
-      subject: input.subject?.trim() || null,
+      subject,
       assigneeId: scope.userId,
     },
     select: { id: true },
   });
+
+  let emailThreading: { messageId?: string } = {};
+  try {
+    const workspace = await prisma.workspace.findUniqueOrThrow({
+      where: { id: scope.workspaceId },
+      select: { name: true, inboundAlias: true },
+    });
+    const sent = await sendReplyEmail({
+      workspaceName: workspace.name,
+      inboundAlias: workspace.inboundAlias,
+      toEmail: email,
+      subject,
+      bodyHtml: textToSafeHtml(bodyText),
+      bodyText,
+      references: [],
+    });
+    emailThreading = { messageId: sent.messageId };
+  } catch (err) {
+    // Same reasoning as sendMessage: the conversation record is more
+    // important than the send succeeding synchronously.
+    logger.error('Outbound proactive email failed to send', err, {
+      workspaceId: scope.workspaceId,
+    });
+  }
 
   const result = await appendMessage({
     conversationId: conversation.id,
@@ -416,6 +503,7 @@ export async function startConversation(scope: Scope, input: StartConversationIn
     senderUserId: scope.userId,
     bodyHtml: textToSafeHtml(bodyText),
     bodyText,
+    emailMessageId: emailThreading.messageId ?? null,
   });
 
   await markRead(conversation.id, participantKeys.user(scope.userId), result.message.seq);

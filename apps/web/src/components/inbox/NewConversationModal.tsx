@@ -52,7 +52,7 @@ export function NewConversationModal({
       >
         <h2 className="text-lg font-semibold text-fg">New conversation</h2>
         <p className="mt-0.5 text-sm text-fg-subtle">
-          Start a conversation with a customer — a call you logged, or reaching out first.
+          Sends a real email to the customer and opens a thread for their reply.
         </p>
 
         <form onSubmit={onSubmit} className="mt-4 space-y-3.5">
