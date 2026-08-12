@@ -9,11 +9,19 @@ import { logger } from '@superdesk/shared/logger';
  *
  * The whole flow is: we add the domain to our Vercel project, Vercel hands
  * back the DNS record the admin needs to create at their own registrar, we
- * poll Vercel's verification endpoint until it reports the domain verified —
- * at which point Vercel has also already issued the TLS certificate,
- * automatically, as part of the same process. There's no separate "now set
- * up SSL" step to build; that's the point of using Vercel's own domain
- * management instead of hand-rolling ACME.
+ * poll until DNS actually resolves through Vercel — at which point Vercel
+ * has also already issued the TLS certificate, automatically, as part of
+ * the same process. There's no separate "now set up SSL" step to build.
+ *
+ * Two different checks feed the status, not one — this was the bug in the
+ * first version of this file, caught by testing against the real API rather
+ * than trusting the docs: adding a domain (`POST .../domains`) returns a
+ * `verified` flag that reflects *ownership* (mainly "is this domain already
+ * claimed by someone else's project"), not whether DNS is actually pointed
+ * here yet. A domain neither we nor anyone else has ever added comes back
+ * `verified: true` immediately. Whether traffic will actually route needs a
+ * second, separate call — `GET /v6/domains/{domain}/config` — whose
+ * `misconfigured` field is the real signal. ACTIVE means both are true.
  *
  * `features().customDomains` gates all of this on VERCEL_API_TOKEN +
  * VERCEL_PROJECT_ID being configured — without them, requestCustomDomain
@@ -22,6 +30,7 @@ import { logger } from '@superdesk/shared/logger';
  */
 
 const DOMAIN_RE = /^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$/i;
+const DEFAULT_CNAME_TARGET = 'cname.vercel-dns.com';
 
 export type DomainVerificationRecord = {
   type: string;
@@ -36,7 +45,6 @@ export type DomainInfo = {
   verifiedAt: string | null;
   lastError: string | null;
   verification: DomainVerificationRecord[];
-  /** The record to point at Vercel — shown regardless of verification state, since it's needed either way. */
   target: { type: 'CNAME'; value: string };
 };
 
@@ -59,6 +67,51 @@ function requireConfigured(): void {
   }
 }
 
+type DomainDetail = { verified?: boolean; verification?: DomainVerificationRecord[] };
+type DomainConfig = { misconfigured?: boolean; recommendedCNAME?: { rank: number; value: string }[] };
+
+async function fetchDomainDetail(domain: string): Promise<DomainDetail | null> {
+  const res = await fetch(vercelUrl(`/v9/projects/${serverEnv().VERCEL_PROJECT_ID}/domains/${domain}`), {
+    headers: vercelHeaders(),
+  });
+  return res.ok ? ((await res.json()) as DomainDetail) : null;
+}
+
+async function fetchDomainConfig(domain: string): Promise<DomainConfig | null> {
+  const res = await fetch(vercelUrl(`/v6/domains/${domain}/config`), { headers: vercelHeaders() });
+  return res.ok ? ((await res.json()) as DomainConfig) : null;
+}
+
+/**
+ * Reconciles our stored status against Vercel's two independent signals.
+ * Called after adding a domain and on every explicit "check status" —
+ * never assumed true just because the add call succeeded.
+ */
+async function syncDomainStatus(workspaceId: string, domain: string): Promise<void> {
+  const [detail, config] = await Promise.all([fetchDomainDetail(domain), fetchDomainConfig(domain)]);
+
+  if (!detail) {
+    await prisma.workspace.update({
+      where: { id: workspaceId },
+      data: { customDomainStatus: 'FAILED', customDomainLastError: 'Could not reach Vercel to check this domain' },
+    });
+    return;
+  }
+
+  const ownershipVerified = detail.verified !== false;
+  const dnsReady = config?.misconfigured === false;
+  const status = !ownershipVerified || !dnsReady ? 'VERIFYING' : 'ACTIVE';
+
+  await prisma.workspace.update({
+    where: { id: workspaceId },
+    data: {
+      customDomainStatus: status,
+      customDomainVerifiedAt: status === 'ACTIVE' ? new Date() : null,
+      customDomainLastError: null,
+    },
+  });
+}
+
 export async function getDomainInfo(scope: Scope): Promise<DomainInfo> {
   const workspace = await prisma.workspace.findUniqueOrThrow({
     where: { id: scope.workspaceId },
@@ -71,10 +124,18 @@ export async function getDomainInfo(scope: Scope): Promise<DomainInfo> {
   });
 
   let verification: DomainVerificationRecord[] = [];
+  let target = { type: 'CNAME' as const, value: DEFAULT_CNAME_TARGET };
+
   if (workspace.customDomain && features().customDomains && workspace.customDomainStatus !== 'ACTIVE') {
     // Best-effort — if Vercel is unreachable, the admin still sees whatever
     // we last knew rather than an error where a status page should be.
-    verification = await fetchVerificationRecords(workspace.customDomain).catch(() => []);
+    const [detail, config] = await Promise.all([
+      fetchDomainDetail(workspace.customDomain).catch(() => null),
+      fetchDomainConfig(workspace.customDomain).catch(() => null),
+    ]);
+    verification = detail?.verification ?? [];
+    const recommended = config?.recommendedCNAME?.[0]?.value;
+    if (recommended) target = { type: 'CNAME', value: recommended.replace(/\.$/, '') };
   }
 
   return {
@@ -83,17 +144,8 @@ export async function getDomainInfo(scope: Scope): Promise<DomainInfo> {
     verifiedAt: workspace.customDomainVerifiedAt?.toISOString() ?? null,
     lastError: workspace.customDomainLastError,
     verification,
-    target: { type: 'CNAME', value: 'cname.vercel-dns.com' },
+    target,
   };
-}
-
-async function fetchVerificationRecords(domain: string): Promise<DomainVerificationRecord[]> {
-  const res = await fetch(vercelUrl(`/v9/projects/${serverEnv().VERCEL_PROJECT_ID}/domains/${domain}`), {
-    headers: vercelHeaders(),
-  });
-  if (!res.ok) return [];
-  const body = (await res.json()) as { verification?: DomainVerificationRecord[] };
-  return body.verification ?? [];
 }
 
 export async function requestCustomDomain(scope: Scope, rawDomain: string): Promise<DomainInfo> {
@@ -116,11 +168,7 @@ export async function requestCustomDomain(scope: Scope, rawDomain: string): Prom
     signal: AbortSignal.timeout(15_000),
   });
 
-  const body = (await res.json().catch(() => ({}))) as {
-    error?: { code?: string; message?: string };
-    verified?: boolean;
-    verification?: DomainVerificationRecord[];
-  };
+  const body = (await res.json().catch(() => ({}))) as { error?: { code?: string; message?: string } };
 
   if (!res.ok) {
     // Vercel returns 409 when the domain is already attached to a *different*
@@ -136,12 +184,7 @@ export async function requestCustomDomain(scope: Scope, rawDomain: string): Prom
   await prisma.workspace
     .update({
       where: { id: scope.workspaceId },
-      data: {
-        customDomain: domain,
-        customDomainStatus: body.verified ? 'ACTIVE' : 'VERIFYING',
-        customDomainVerifiedAt: body.verified ? new Date() : null,
-        customDomainLastError: null,
-      },
+      data: { customDomain: domain, customDomainStatus: 'VERIFYING', customDomainVerifiedAt: null, customDomainLastError: null },
     })
     .catch(async (err) => {
       // Unique constraint — this domain is already claimed by another
@@ -151,10 +194,15 @@ export async function requestCustomDomain(scope: Scope, rawDomain: string): Prom
         method: 'DELETE',
         headers: vercelHeaders(),
       }).catch(() => {});
-      throw new AppError('CONFLICT', 'That domain is already in use by another workspace', {
-        cause: err,
-      });
+      throw new AppError('CONFLICT', 'That domain is already in use by another workspace', { cause: err });
     });
+
+  // The domain might already resolve correctly (e.g. DNS was set up ahead of
+  // time) — check immediately instead of making the admin wait for a
+  // manual "check status" click to find out.
+  await syncDomainStatus(scope.workspaceId, domain).catch((err) =>
+    logger.error('Initial domain status sync failed', err, { domain }),
+  );
 
   return getDomainInfo(scope);
 }
@@ -168,34 +216,7 @@ export async function refreshDomainStatus(scope: Scope): Promise<DomainInfo> {
   });
   if (!workspace.customDomain) throw new AppError('BAD_REQUEST', 'No custom domain is set');
 
-  const env = serverEnv();
-  const res = await fetch(
-    vercelUrl(`/v9/projects/${env.VERCEL_PROJECT_ID}/domains/${workspace.customDomain}/verify`),
-    { method: 'POST', headers: vercelHeaders(), signal: AbortSignal.timeout(15_000) },
-  );
-  const body = (await res.json().catch(() => ({}))) as {
-    verified?: boolean;
-    error?: { message?: string };
-  };
-
-  if (!res.ok) {
-    await prisma.workspace.update({
-      where: { id: scope.workspaceId },
-      data: { customDomainStatus: 'FAILED', customDomainLastError: body.error?.message ?? 'Verification failed' },
-    });
-    logger.warn('Domain verification check failed', { domain: workspace.customDomain, body });
-    return getDomainInfo(scope);
-  }
-
-  await prisma.workspace.update({
-    where: { id: scope.workspaceId },
-    data: {
-      customDomainStatus: body.verified ? 'ACTIVE' : 'VERIFYING',
-      customDomainVerifiedAt: body.verified ? new Date() : null,
-      customDomainLastError: null,
-    },
-  });
-
+  await syncDomainStatus(scope.workspaceId, workspace.customDomain);
   return getDomainInfo(scope);
 }
 
