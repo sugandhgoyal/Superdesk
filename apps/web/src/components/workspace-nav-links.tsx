@@ -7,6 +7,7 @@ import { cx } from '@/components/ui';
 const LINKS = [
   { href: 'inbox', label: 'Inbox' },
   { href: 'kb', label: 'Knowledge Base' },
+  { href: 'domain', label: 'Domain' },
 ];
 
 export function WorkspaceNavLinks({ slug }: { slug: string }) {

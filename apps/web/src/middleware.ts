@@ -2,19 +2,78 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { SESSION_COOKIE, verifySessionToken } from '@/lib/auth/token';
 
 /**
- * Edge-side gate for dashboard routes.
+ * Edge middleware — two unrelated jobs sharing one entry point because both
+ * need to run before a page renders.
  *
- * This checks the token's *signature* only — no database call, because
- * middleware runs on every request including static assets and a Postgres
- * round trip here would tax the whole app. It is a cheap filter that stops
- * unauthenticated traffic before it reaches a server component; the pages and
- * API routes behind it still call `requireUser()`, which validates the session
- * row and can see revocations.
+ * 1. Auth gate for dashboard routes (/w/*, /onboarding): checks the session
+ *    token's *signature* only, no database call — middleware runs on every
+ *    matched request and a Postgres round trip here would tax the whole app.
+ *    Cheap redirect optimisation, not the security boundary; pages and API
+ *    routes behind it still call `requireUser()`, which validates the
+ *    session row and can see revocations.
  *
- * Treating this as the only auth check would be a real vulnerability. It's a
- * redirect optimisation, not the security boundary.
+ * 2. Custom-domain rewrite: a request whose Host header isn't one of our own
+ *    domains is a workspace's connected custom domain (Req 7) — resolved via
+ *    a tiny cached API lookup rather than a direct DB query, since Edge
+ *    middleware can't hold the TCP connection Prisma needs. Matched, it's
+ *    rewritten to that workspace's /help/[slug] tree so the same public KB
+ *    code serves both help.workspace.com/some-article and
+ *    our-app.com/help/workspace/some-article. Unmatched, it 404s outright —
+ *    letting it fall through would mean an unaffiliated domain pointed at us
+ *    by mistake (or by someone else's DNS misconfiguration) renders our own
+ *    homepage or dashboard under their name.
  */
+
+function isOwnHost(hostname: string): boolean {
+  const appHost = safeHostname(process.env.APP_URL);
+  const kbBaseHost = process.env.KB_BASE_DOMAIN;
+  return (
+    hostname === appHost ||
+    hostname === kbBaseHost ||
+    hostname.endsWith('.vercel.app') ||
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1'
+  );
+}
+
+function safeHostname(url: string | undefined): string | undefined {
+  try {
+    return url ? new URL(url).hostname : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function resolveCustomDomain(req: NextRequest, hostname: string): Promise<NextResponse> {
+  try {
+    const lookup = await fetch(new URL(`/api/domains/resolve?host=${encodeURIComponent(hostname)}`, req.url), {
+      headers: { 'x-internal-middleware': '1' },
+    });
+    if (lookup.ok) {
+      const { slug } = (await lookup.json()) as { slug: string };
+      const url = req.nextUrl.clone();
+      url.pathname = `/help/${slug}${req.nextUrl.pathname === '/' ? '' : req.nextUrl.pathname}`;
+      return NextResponse.rewrite(url);
+    }
+  } catch {
+    // Treated the same as "not found" below — a lookup failure shouldn't
+    // serve our own app under someone else's domain either.
+  }
+  return new NextResponse('Not found', { status: 404 });
+}
+
 export async function middleware(req: NextRequest) {
+  const hostname = req.nextUrl.hostname;
+
+  if (!isOwnHost(hostname)) {
+    return resolveCustomDomain(req, hostname);
+  }
+
+  const { pathname } = req.nextUrl;
+  if (!(pathname.startsWith('/w/') || pathname === '/onboarding')) {
+    return NextResponse.next();
+  }
+
   const token = req.cookies.get(SESSION_COOKIE)?.value;
   const secret = process.env.AUTH_SECRET;
 
@@ -45,13 +104,5 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  /*
-   * Only workspace routes are gated. Deliberately excluded:
-   *   /api/*      — routes authenticate themselves and must return JSON 401s,
-   *                 not HTML redirects
-   *   /help/*     — the public knowledge base
-   *   /widget/*   — the embeddable chat widget
-   *   /login, /signup, /invite
-   */
-  matcher: ['/w/:path*', '/onboarding'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/).*)'],
 };
