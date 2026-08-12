@@ -22,20 +22,29 @@ type RequestOptions = {
   method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
   body?: unknown;
   signal?: AbortSignal;
+  /**
+   * Extra headers, merged in after Content-Type. Only the widget needs this
+   * today — it authenticates with a bearer token instead of the session
+   * cookie every other caller relies on.
+   */
+  headers?: Record<string, string>;
 };
 
 export async function api<T = unknown>(
   path: string,
   options: RequestOptions = {},
 ): Promise<T> {
-  const { method = 'GET', body, signal } = options;
+  const { method = 'GET', body, signal, headers } = options;
 
   let res: Response;
   try {
     res = await fetch(path, {
       method,
       signal,
-      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      headers: {
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+        ...headers,
+      },
       body: body ? JSON.stringify(body) : undefined,
       // Session cookie travels with every call; the server checks Origin.
       credentials: 'same-origin',

@@ -31,8 +31,14 @@ const coreSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   DATABASE_URL: nonEmpty,
   DIRECT_URL: optionalString,
-  // TCP Redis — used by the gateway (Socket.IO adapter) and worker (BullMQ),
-  // both long-lived processes that can hold a connection open.
+  // TCP Redis. Originally reserved for a standalone Socket.IO gateway
+  // process; realtime chat instead ships as Server-Sent Events served
+  // directly from the Next.js app (see apps/web/src/app/api/widget/stream and
+  // .../conversations/[id]/stream) so the whole product stays on one
+  // deployable with no long-lived process to host separately. Kept — and
+  // still required — for a future queue-backed worker (inbound email
+  // processing, scheduled digests) that genuinely needs a persistent
+  // connection a serverless function can't hold.
   REDIS_URL: nonEmpty,
   // HTTP Redis — used by serverless request handlers for rate limiting. A
   // TCP pool per lambda invocation exhausts Upstash's connection limit under

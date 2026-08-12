@@ -11,6 +11,7 @@ import type {
   ConversationDetailResponse,
   ConversationListResponse,
   MemberOption,
+  MessageItem,
   StatusFilter,
 } from '@/lib/types/inbox';
 
@@ -21,8 +22,11 @@ const STATUS_TABS: { value: StatusFilter; label: string }[] = [
   { value: 'ALL', label: 'All' },
 ];
 
+// The conversation list isn't message-granular — snoozing or an assignment
+// change elsewhere doesn't have a per-message event to hook, so it stays on
+// a plain interval. The open thread itself no longer polls at all; see
+// connectStream below.
 const LIST_POLL_MS = 20_000;
-const DETAIL_POLL_MS = 8_000;
 
 export function InboxClient({
   workspaceSlug,
@@ -115,6 +119,66 @@ export function InboxClient({
     }
   }, [workspaceSlug, query, list.nextCursor]);
 
+  const markRead = useCallback(
+    (id: string) => {
+      api(`/api/w/${workspaceSlug}/conversations/${id}/read`, { method: 'POST', body: {} }).catch(
+        () => {},
+      );
+      setList((prev) => ({
+        ...prev,
+        items: prev.items.map((c) => (c.id === id ? { ...c, unread: false } : c)),
+      }));
+    },
+    [workspaceSlug],
+  );
+
+  // Holds the live EventSource for whichever conversation is open. A ref, not
+  // state — reconnecting is driven explicitly by connectStream, never by a
+  // render, so switching the selected conversation can't leave two streams
+  // running against the same detail state.
+  const eventSourceRef = useRef<EventSource | null>(null);
+
+  const connectStream = useCallback(
+    (id: string, afterSeq: number) => {
+      eventSourceRef.current?.close();
+
+      const es = new EventSource(
+        `/api/w/${workspaceSlug}/conversations/${id}/stream?afterSeq=${afterSeq}`,
+      );
+      es.onmessage = (event) => {
+        let message: MessageItem;
+        try {
+          message = JSON.parse(event.data);
+        } catch {
+          return; // Malformed frame — the next one picks up from its own id.
+        }
+
+        setDetail((prev) => {
+          if (!prev || prev.conversation.id !== id) return prev;
+          if (prev.conversation.messages.some((m) => m.id === message.id)) return prev;
+          return {
+            ...prev,
+            conversation: {
+              ...prev.conversation,
+              messages: [...prev.conversation.messages, message].sort((a, b) => a.seq - b.seq),
+              msgSeq: Math.max(prev.conversation.msgSeq, message.seq),
+              lastMessageAt: message.createdAt,
+            },
+          };
+        });
+
+        loadList({ silent: true });
+        markRead(id);
+      };
+      eventSourceRef.current = es;
+    },
+    [workspaceSlug, loadList, markRead],
+  );
+
+  useEffect(() => {
+    return () => eventSourceRef.current?.close();
+  }, []);
+
   const loadDetail = useCallback(
     async (id: string, opts: { silent?: boolean } = {}) => {
       if (!opts.silent) setDetailLoading(true);
@@ -123,40 +187,25 @@ export function InboxClient({
           `/api/w/${workspaceSlug}/conversations/${id}`,
         );
         setDetail(result);
-
-        // Mark read as a side effect of viewing it, then reflect that locally
-        // right away instead of waiting for the next list poll.
-        api(`/api/w/${workspaceSlug}/conversations/${id}/read`, { method: 'POST', body: {} }).catch(
-          () => {},
-        );
-        setList((prev) => ({
-          ...prev,
-          items: prev.items.map((c) => (c.id === id ? { ...c, unread: false } : c)),
-        }));
+        markRead(id);
+        // A silent refresh (after assign/snooze/resolve, say) updates state
+        // in place — the stream connection it already has stays open. Only a
+        // fresh selection opens a new one, seeded from what this load just
+        // returned so nothing already visible gets redelivered.
+        if (!opts.silent) connectStream(id, result.conversation.msgSeq);
       } catch {
         if (!opts.silent) setDetail(null);
       } finally {
         if (!opts.silent) setDetailLoading(false);
       }
     },
-    [workspaceSlug],
+    [workspaceSlug, markRead, connectStream],
   );
 
   function selectConversation(id: string) {
     setSelectedId(id);
     loadDetail(id);
   }
-
-  // Poll the open conversation for new messages from the other side.
-  const selectedIdRef = useRef(selectedId);
-  selectedIdRef.current = selectedId;
-  useEffect(() => {
-    if (!selectedId) return;
-    const id = setInterval(() => {
-      if (selectedIdRef.current) loadDetail(selectedIdRef.current, { silent: true });
-    }, DETAIL_POLL_MS);
-    return () => clearInterval(id);
-  }, [selectedId, loadDetail]);
 
   function refreshAfterAction() {
     if (selectedId) loadDetail(selectedId, { silent: true });
