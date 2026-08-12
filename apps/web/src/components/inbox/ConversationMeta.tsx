@@ -36,11 +36,15 @@ export function ConversationMeta({
   conversation,
   members,
   onChanged,
+  summaryOpen,
+  onToggleSummary,
 }: {
   workspaceSlug: string;
   conversation: ConversationDetail;
   members: MemberOption[];
   onChanged: () => void;
+  summaryOpen: boolean;
+  onToggleSummary: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -144,6 +148,15 @@ export function ConversationMeta({
             </div>
           )}
         </div>
+
+        <Button
+          type="button"
+          variant={summaryOpen ? 'primary' : 'secondary'}
+          size="sm"
+          onClick={onToggleSummary}
+        >
+          AI summary
+        </Button>
 
         <div className="ml-auto">
           {conversation.status === 'RESOLVED' ? (

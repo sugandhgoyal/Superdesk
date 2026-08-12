@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { cx, Spinner } from '@/components/ui';
 import { contactLabel, fullTimestamp, initials, relativeTime } from '@/lib/format';
 import { ConversationMeta } from './ConversationMeta';
 import { Composer } from './Composer';
+import { SummaryPanel } from './SummaryPanel';
 import type { ConversationDetail, MemberOption, MessageItem } from '@/lib/types/inbox';
 
 function senderName(
@@ -98,6 +99,7 @@ export function ConversationThread({
 }) {
   const membersById = new Map(members.map((m) => [m.userId, m]));
   const scrollRef = useRef<HTMLUListElement>(null);
+  const [summaryOpen, setSummaryOpen] = useState(false);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -127,7 +129,18 @@ export function ConversationThread({
         conversation={conversation}
         members={members}
         onChanged={onChanged}
+        summaryOpen={summaryOpen}
+        onToggleSummary={() => setSummaryOpen((v) => !v)}
       />
+
+      {summaryOpen && (
+        <SummaryPanel
+          workspaceSlug={workspaceSlug}
+          conversationId={conversation.id}
+          summary={conversation.summary}
+          onChanged={onChanged}
+        />
+      )}
 
       <ul ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
         {conversation.messages.length === 0 ? (

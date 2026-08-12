@@ -57,6 +57,21 @@ export type MessageItem = {
   createdAt: string;
 };
 
+export type ConversationSummaryShape = {
+  whatUserWants: string;
+  whatsBeenTried: string;
+  currentStatus: string;
+  sentiment: 'positive' | 'neutral' | 'frustrated' | 'negative';
+  suggestedNextStep: string;
+};
+
+export type ConversationSummaryRecord = {
+  summary: ConversationSummaryShape;
+  upToSeq: number;
+  degraded: boolean;
+  updatedAt: string;
+};
+
 export type ConversationDetail = {
   id: string;
   channel: Channel;
@@ -69,12 +84,7 @@ export type ConversationDetail = {
   contact: ContactRef & { metadata: unknown };
   assignee: (AssigneeRef & { email: string }) | null;
   messages: MessageItem[];
-  summary: {
-    summary: unknown;
-    upToSeq: number;
-    degraded: boolean;
-    updatedAt: string;
-  } | null;
+  summary: ConversationSummaryRecord | null;
 };
 
 export type ConversationDetailResponse = {
