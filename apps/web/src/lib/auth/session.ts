@@ -1,3 +1,4 @@
+import { cache } from 'react';
 import { cookies, headers } from 'next/headers';
 import { prisma } from '@superdesk/db';
 import { serverEnv } from '@superdesk/shared/env';
@@ -58,8 +59,15 @@ export async function createSession(userId: string): Promise<void> {
  * Resolves the current user, validating the session row as well as the
  * signature. Returns null rather than throwing so callers can decide whether
  * anonymous access is acceptable.
+ *
+ * Wrapped in React's `cache()` — every layout and page under /w/[slug] calls
+ * this (directly, or via `requireWorkspace`), and without memoization that's
+ * a repeated session-row query for the same request. `cache()` is per-request
+ * only (a fresh request always re-validates for real); it just stops the
+ * layout and the page from independently paying for the same DB round trip
+ * when Next.js renders them both to answer one navigation.
  */
-export async function getCurrentUser(): Promise<AuthedUser | null> {
+export const getCurrentUser = cache(async (): Promise<AuthedUser | null> => {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
   if (!token) return null;
@@ -106,7 +114,7 @@ export async function getCurrentUser(): Promise<AuthedUser | null> {
     avatarUrl: session.user.avatarUrl,
     sessionId: session.id,
   };
-}
+});
 
 export async function requireUser(): Promise<AuthedUser> {
   const user = await getCurrentUser();
