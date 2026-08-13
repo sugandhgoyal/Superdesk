@@ -306,6 +306,56 @@ export type KbSearchResult = {
 
 const SEARCH_LIMIT = 8;
 
+export type RelevantArticle = { title: string; slug: string; bodyText: string };
+
+/**
+ * Same ILIKE-and-rank approach as searchPublicArticles, scoped by
+ * workspaceId instead of a public slug lookup, and returning enough of the
+ * body (not just the excerpt) to actually ground an AI-drafted reply —
+ * lib/ai/draft-reply.ts's one caller. Kept separate from the public search
+ * rather than generalizing that function: this one exists for the model to
+ * read, not for a person to click through, so it needs different fields and
+ * has no reason to also carry the public function's kbEnabled gate (a
+ * disabled public KB doesn't mean an agent's draft assist should stop
+ * consulting the workspace's own articles).
+ */
+export async function findRelevantArticles(
+  workspaceId: string,
+  query: string,
+  limit = 3,
+): Promise<RelevantArticle[]> {
+  const q = query.trim();
+  if (!q) return [];
+
+  const matches = await prisma.article.findMany({
+    where: {
+      workspaceId,
+      status: 'PUBLISHED',
+      OR: [
+        { title: { contains: q, mode: 'insensitive' } },
+        { excerpt: { contains: q, mode: 'insensitive' } },
+        { bodyText: { contains: q, mode: 'insensitive' } },
+      ],
+    },
+    take: limit * 3,
+    select: { title: true, slug: true, bodyText: true },
+  });
+
+  const qLower = q.toLowerCase();
+  return matches
+    .map((a) => ({
+      article: a,
+      score: a.title.toLowerCase().includes(qLower) ? 2 : a.bodyText.toLowerCase().includes(qLower) ? 1 : 0,
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(({ article }) => ({
+      title: article.title,
+      slug: article.slug,
+      bodyText: article.bodyText.slice(0, 800),
+    }));
+}
+
 export async function searchPublicArticles(
   workspaceSlug: string,
   query: string,

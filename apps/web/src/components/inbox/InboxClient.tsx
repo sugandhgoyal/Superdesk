@@ -39,7 +39,7 @@ export function InboxClient({
   members: MemberOption[];
   initialList: ConversationListResponse;
 }) {
-  const [status, setStatus] = useState<StatusFilter>('OPEN');
+  const [status, setStatus] = useState<StatusFilter>('ALL');
   const [assignee, setAssignee] = useState<AssigneeFilter>('everyone');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');

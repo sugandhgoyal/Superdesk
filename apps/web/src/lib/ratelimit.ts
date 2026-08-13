@@ -139,6 +139,7 @@ export const LIMITS = {
   widgetBoot: { limit: 60, windowSeconds: 60 },
   widgetMessage: { limit: 30, windowSeconds: 60 },
   aiSummary: { limit: 20, windowSeconds: 3600 },
+  aiDraftReply: { limit: 30, windowSeconds: 3600 },
   kbSearch: { limit: 120, windowSeconds: 60 },
   api: { limit: 300, windowSeconds: 60 },
 } as const;

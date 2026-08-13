@@ -14,7 +14,7 @@ export default async function InboxPage({
 
   const [members, initialList] = await Promise.all([
     listMembers(scope),
-    listConversations(scope, { status: 'OPEN' }),
+    listConversations(scope, { status: 'ALL' }),
   ]);
 
   // Server components hand Prisma's Date objects to the client tree as-is;
