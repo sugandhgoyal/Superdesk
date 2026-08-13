@@ -319,41 +319,76 @@ export type RelevantArticle = { title: string; slug: string; bodyText: string };
  * disabled public KB doesn't mean an agent's draft assist should stop
  * consulting the workspace's own articles).
  */
+// Common enough in a customer message to be useless as a match signal —
+// filtered out before searching so "can you help me reset it" doesn't spend
+// its keyword budget on "can" and "help" instead of "reset".
+const STOPWORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'been',
+  'to', 'of', 'in', 'on', 'at', 'for', 'with', 'it', 'this', 'that', 'do', 'does',
+  'i', 'you', 'me', 'my', 'your', 'we', 'our', 'us', 'they', 'their',
+  'can', 'could', 'would', 'should', 'will', 'just', 'get', 'got',
+  'help', 'please', 'hi', 'hello', 'hey', 'thanks', 'thank', 'not', 'no',
+]);
+
+function extractKeywords(text: string): string[] {
+  const words = text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !STOPWORDS.has(w));
+  return Array.from(new Set(words));
+}
+
+/**
+ * A whole customer sentence — "I forgot my password, can you help me reset
+ * it?" — almost never appears verbatim in an article, so this can't just
+ * `contains` the raw query the way the public search box does (there, a
+ * person types a short deliberate query; here, the input is natural
+ * language). Extracted keywords instead, ranked by how many distinct
+ * keywords each article matches — the closest a substring search gets to
+ * "these are about the same thing" without a real search index.
+ */
 export async function findRelevantArticles(
   workspaceId: string,
   query: string,
   limit = 3,
 ): Promise<RelevantArticle[]> {
-  const q = query.trim();
-  if (!q) return [];
+  const keywords = extractKeywords(query);
+  if (keywords.length === 0) return [];
 
   const matches = await prisma.article.findMany({
     where: {
       workspaceId,
       status: 'PUBLISHED',
-      OR: [
-        { title: { contains: q, mode: 'insensitive' } },
-        { excerpt: { contains: q, mode: 'insensitive' } },
-        { bodyText: { contains: q, mode: 'insensitive' } },
-      ],
+      OR: keywords.flatMap((kw) => [
+        { title: { contains: kw, mode: 'insensitive' as const } },
+        { bodyText: { contains: kw, mode: 'insensitive' as const } },
+      ]),
     },
-    take: limit * 3,
+    take: limit * 4,
     select: { title: true, slug: true, bodyText: true },
   });
 
-  const qLower = q.toLowerCase();
-  return matches
-    .map((a) => ({
-      article: a,
-      score: a.title.toLowerCase().includes(qLower) ? 2 : a.bodyText.toLowerCase().includes(qLower) ? 1 : 0,
-    }))
+  const scored = matches
+    .map((a) => {
+      const haystack = `${a.title} ${a.bodyText}`.toLowerCase();
+      const titleLower = a.title.toLowerCase();
+      const matchedKeywords = keywords.filter((kw) => haystack.includes(kw));
+      // A title hit counts double — an article titled "Resetting your
+      // password" is a stronger signal than one that merely mentions the
+      // word "password" somewhere in a long body.
+      const score = matchedKeywords.length + keywords.filter((kw) => titleLower.includes(kw)).length;
+      return { article: a, score };
+    })
+    .filter((m) => m.score > 0)
     .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
-    .map(({ article }) => ({
-      title: article.title,
-      slug: article.slug,
-      bodyText: article.bodyText.slice(0, 800),
-    }));
+    .slice(0, limit);
+
+  return scored.map(({ article }) => ({
+    title: article.title,
+    slug: article.slug,
+    bodyText: article.bodyText.slice(0, 800),
+  }));
 }
 
 export async function searchPublicArticles(
