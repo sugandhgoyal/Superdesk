@@ -11,6 +11,7 @@ import { AppError } from '@superdesk/shared/errors';
 import { logger } from '@superdesk/shared/logger';
 import { escapeHtml } from '@/lib/sanitize';
 import { sendReplyEmail } from '@/lib/email/outbound';
+import { computeThreadKey } from '@/lib/email/inbound';
 
 /**
  * Conversation management — the unified inbox's read and write paths.
@@ -468,6 +469,13 @@ export async function startConversation(scope: Scope, input: StartConversationIn
       channel: 'EMAIL',
       subject,
       assigneeId: scope.userId,
+      // Without this, a customer's later reply to this email has no
+      // In-Reply-To to match yet (we sent first) and no thread key either
+      // — the inbound webhook's fallback matching would find nothing and
+      // silently open a second, duplicate conversation instead of
+      // threading into this one. Same key the inbound path computes, so
+      // either side reaching the thread first works the same way.
+      emailThreadKey: await computeThreadKey(subject, email),
     },
     select: { id: true },
   });

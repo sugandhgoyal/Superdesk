@@ -65,7 +65,16 @@ function normalizeSubject(subject: string): string {
     .toLowerCase();
 }
 
-async function computeThreadKey(subject: string, contactEmail: string): Promise<string> {
+/**
+ * Exported so an agent-initiated conversation (lib/conversations.ts's
+ * startConversation) can be given the same thread key up front — without
+ * it, a customer's later reply-to-that-email has nothing correct to match
+ * against (no In-Reply-To exists yet either, since we sent first) and
+ * silently starts a second, duplicate conversation instead of threading
+ * into the one the agent already opened. Found via testing, not by
+ * inspection: an agent-started thread followed by a real customer reply.
+ */
+export async function computeThreadKey(subject: string, contactEmail: string): Promise<string> {
   const input = `${normalizeSubject(subject)}::${contactEmail.trim().toLowerCase()}`;
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
   return Array.from(new Uint8Array(digest))
