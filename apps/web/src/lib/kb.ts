@@ -139,11 +139,27 @@ async function assertSectionOwnership(workspaceId: string, sectionId: string | n
   if (!section) throw new AppError('BAD_REQUEST', 'Section not found');
 }
 
+/**
+ * The flat article list — every article regardless of section, including
+ * ones with no section at all. `listSectionsAdmin`'s nested
+ * `section.articles` can't represent an uncategorized article (there's no
+ * section object for it to nest under), which is exactly what made a newly
+ * created article with no section picked invisible in the admin sidebar —
+ * this is the source of truth the sidebar groups client-side instead.
+ */
 export async function listArticlesAdmin(scope: Scope, filter: { status?: 'DRAFT' | 'PUBLISHED' } = {}) {
   return prisma.article.findMany({
     where: { workspaceId: scope.workspaceId, ...(filter.status ? { status: filter.status } : {}) },
     orderBy: { updatedAt: 'desc' },
-    include: { section: { select: { id: true, name: true } } },
+    select: {
+      id: true,
+      title: true,
+      slug: true,
+      status: true,
+      updatedAt: true,
+      viewCount: true,
+      sectionId: true,
+    },
   });
 }
 

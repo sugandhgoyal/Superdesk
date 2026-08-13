@@ -1,7 +1,7 @@
 import { requireWorkspace } from '@/lib/workspace-context';
-import { listSectionsAdmin } from '@/lib/kb';
+import { listArticlesAdmin, listSectionsAdmin } from '@/lib/kb';
 import { KbAdminClient } from '@/components/kb-admin/KbAdminClient';
-import type { AdminSection } from '@/lib/types/kb';
+import type { AdminArticleListItem, AdminSection } from '@/lib/types/kb';
 
 export default async function KbAdminPage({
   params,
@@ -10,12 +10,16 @@ export default async function KbAdminPage({
 }) {
   const { slug } = await params;
   const { workspace, scope } = await requireWorkspace(slug);
-  const sections = await listSectionsAdmin(scope);
+  const [sections, articles] = await Promise.all([
+    listSectionsAdmin(scope),
+    listArticlesAdmin(scope),
+  ]);
 
   return (
     <KbAdminClient
       workspaceSlug={workspace.slug}
       initialSections={JSON.parse(JSON.stringify(sections)) as AdminSection[]}
+      initialArticles={JSON.parse(JSON.stringify(articles)) as AdminArticleListItem[]}
     />
   );
 }

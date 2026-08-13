@@ -7,6 +7,11 @@ export type AdminArticleSummary = {
   viewCount: number;
 };
 
+/** The flat shape from listArticlesAdmin — includes sectionId, which the
+ *  nested AdminSection.articles shape (below) can't represent for an
+ *  uncategorized article. */
+export type AdminArticleListItem = AdminArticleSummary & { sectionId: string | null };
+
 export type AdminSection = {
   id: string;
   name: string;

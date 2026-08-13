@@ -1,29 +1,52 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { ApiError, api } from '@/lib/api-client';
 import { Badge, Button, Input } from '@/components/ui';
 import { relativeTime } from '@/lib/format';
 import { ArticleEditor } from './ArticleEditor';
-import type { AdminArticleFull, AdminSection } from '@/lib/types/kb';
+import type { AdminArticleFull, AdminArticleListItem, AdminSection } from '@/lib/types/kb';
 
 export function KbAdminClient({
   workspaceSlug,
   initialSections,
+  initialArticles,
 }: {
   workspaceSlug: string;
   initialSections: AdminSection[];
+  initialArticles: AdminArticleListItem[];
 }) {
   const [sections, setSections] = useState(initialSections);
+  const [articles, setArticles] = useState(initialArticles);
   const [selected, setSelected] = useState<AdminArticleFull | 'new' | null>(null);
   const [newSectionName, setNewSectionName] = useState('');
   const [addingSection, setAddingSection] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const refreshSections = useCallback(async () => {
+  // Grouped from the flat article list, not from Section.articles — a
+  // section object has nowhere to nest an article that isn't in any
+  // section, which was exactly why a newly created, uncategorized article
+  // never showed up here at all.
+  const bySectionId = useMemo(() => {
+    const map = new Map<string, AdminArticleListItem[]>();
+    for (const a of articles) {
+      const key = a.sectionId ?? '__uncategorized';
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(a);
+    }
+    return map;
+  }, [articles]);
+
+  const uncategorized = bySectionId.get('__uncategorized') ?? [];
+
+  const refreshAll = useCallback(async () => {
     try {
-      const res = await api<{ sections: AdminSection[] }>(`/api/w/${workspaceSlug}/kb/sections`);
-      setSections(res.sections);
+      const [sectionsRes, articlesRes] = await Promise.all([
+        api<{ sections: AdminSection[] }>(`/api/w/${workspaceSlug}/kb/sections`),
+        api<{ articles: AdminArticleListItem[] }>(`/api/w/${workspaceSlug}/kb/articles`),
+      ]);
+      setSections(sectionsRes.sections);
+      setArticles(articlesRes.articles);
     } catch {
       // Leave the previous list showing — a failed background refresh isn't
       // worth surfacing over whatever action just succeeded.
@@ -47,7 +70,7 @@ export function KbAdminClient({
     try {
       await api(`/api/w/${workspaceSlug}/kb/sections`, { method: 'POST', body: { name } });
       setNewSectionName('');
-      await refreshSections();
+      await refreshAll();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to create section');
     } finally {
@@ -59,13 +82,31 @@ export function KbAdminClient({
     if (!confirm(`Delete section "${name}"? Its articles will become uncategorized, not deleted.`)) return;
     try {
       await api(`/api/w/${workspaceSlug}/kb/sections/${id}`, { method: 'DELETE' });
-      await refreshSections();
+      await refreshAll();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to delete section');
     }
   }
 
-  const allSections = sections; // includes uncategorized handling below via null section
+  function ArticleRow({ a }: { a: AdminArticleListItem }) {
+    return (
+      <li>
+        <button
+          type="button"
+          onClick={() => openArticle(a.id)}
+          className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-bg-subtle"
+        >
+          <span className="truncate text-fg">{a.title}</span>
+          <span className="flex shrink-0 items-center gap-1.5">
+            <Badge tone={a.status === 'PUBLISHED' ? 'success' : 'neutral'}>
+              {a.status === 'PUBLISHED' ? 'Live' : 'Draft'}
+            </Badge>
+            <span className="text-xs text-fg-subtle">{relativeTime(a.updatedAt)}</span>
+          </span>
+        </button>
+      </li>
+    );
+  }
 
   return (
     <div className="flex h-full min-h-0">
@@ -92,42 +133,43 @@ export function KbAdminClient({
         </p>
 
         <div className="mt-4 space-y-4">
-          {allSections.map((section) => (
-            <div key={section.id}>
-              <div className="flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-fg">{section.name}</h2>
-                <button
-                  type="button"
-                  onClick={() => deleteSection(section.id, section.name)}
-                  className="text-xs text-fg-subtle hover:text-danger"
-                >
-                  Delete section
-                </button>
+          {sections.map((section) => {
+            const sectionArticles = bySectionId.get(section.id) ?? [];
+            return (
+              <div key={section.id}>
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-semibold text-fg">{section.name}</h2>
+                  <button
+                    type="button"
+                    onClick={() => deleteSection(section.id, section.name)}
+                    className="text-xs text-fg-subtle hover:text-danger"
+                  >
+                    Delete section
+                  </button>
+                </div>
+                <ul className="mt-1 space-y-0.5">
+                  {sectionArticles.length === 0 && (
+                    <li className="py-1 text-xs text-fg-subtle">No articles yet</li>
+                  )}
+                  {sectionArticles.map((a) => (
+                    <ArticleRow key={a.id} a={a} />
+                  ))}
+                </ul>
               </div>
+            );
+          })}
+
+          {uncategorized.length > 0 && (
+            <div>
+              <h2 className="text-sm font-semibold text-fg">Uncategorized</h2>
+              <p className="text-xs text-fg-subtle">Articles with no section assigned.</p>
               <ul className="mt-1 space-y-0.5">
-                {section.articles.length === 0 && (
-                  <li className="py-1 text-xs text-fg-subtle">No articles yet</li>
-                )}
-                {section.articles.map((a) => (
-                  <li key={a.id}>
-                    <button
-                      type="button"
-                      onClick={() => openArticle(a.id)}
-                      className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-bg-subtle"
-                    >
-                      <span className="truncate text-fg">{a.title}</span>
-                      <span className="flex shrink-0 items-center gap-1.5">
-                        <Badge tone={a.status === 'PUBLISHED' ? 'success' : 'neutral'}>
-                          {a.status === 'PUBLISHED' ? 'Live' : 'Draft'}
-                        </Badge>
-                        <span className="text-xs text-fg-subtle">{relativeTime(a.updatedAt)}</span>
-                      </span>
-                    </button>
-                  </li>
+                {uncategorized.map((a) => (
+                  <ArticleRow key={a.id} a={a} />
                 ))}
               </ul>
             </div>
-          ))}
+          )}
 
           <form onSubmit={addSection} className="flex gap-2 pt-2">
             <Input
@@ -146,16 +188,25 @@ export function KbAdminClient({
       <div className="min-w-0 flex-1">
         {selected ? (
           <ArticleEditor
+            // Forces a fresh component instance (and fresh internal state)
+            // whenever the target changes — otherwise React reuses the same
+            // instance across "select article A" -> "New article", and its
+            // useState-initialized title/content/etc. never re-run, so the
+            // form kept showing A's content under a "New article" header.
+            key={selected === 'new' ? 'new' : selected.id}
             workspaceSlug={workspaceSlug}
             sections={sections}
             article={selected === 'new' ? null : selected}
-            onSaved={async () => {
-              await refreshSections();
-              if (selected !== 'new') await openArticle(selected.id);
+            onSaved={async (saved) => {
+              await refreshAll();
+              // Land on the article that was just created/edited, with its
+              // real saved data — not left sitting on a stale "New article"
+              // view after a publish.
+              setSelected(saved);
             }}
             onDeleted={() => {
               setSelected(null);
-              refreshSections();
+              refreshAll();
             }}
             onClose={() => setSelected(null)}
           />

@@ -39,6 +39,11 @@ export function DomainSettingsClient({
   // clicked.
   const [pending, setPending] = useState<'add' | 'check' | 'remove' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Separate from `info.verifiedAt` on purpose — that only ever changes once
+  // DNS is actually correct. Before this, clicking "Check status" while
+  // still waiting on DNS updated nothing on screen at all, which reads as
+  // "the button didn't do anything" even though it genuinely re-checked.
+  const [lastCheckedAt, setLastCheckedAt] = useState<Date | null>(null);
 
   const base = `/api/w/${workspaceSlug}/domain`;
 
@@ -63,6 +68,7 @@ export function DomainSettingsClient({
     try {
       const result = await api<DomainInfo>(`${base}/verify`, { method: 'POST', body: {} });
       setInfo(result);
+      setLastCheckedAt(new Date());
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to check status');
     } finally {
@@ -130,6 +136,12 @@ export function DomainSettingsClient({
                   <span className="text-xs text-fg-subtle">Verified {fullTimestamp(info.verifiedAt)}</span>
                 )}
               </div>
+              {lastCheckedAt && (
+                <p className="mt-1 text-xs text-fg-subtle">
+                  Last checked {fullTimestamp(lastCheckedAt.toISOString())}
+                  {info.status !== 'ACTIVE' && ' — still waiting on DNS'}
+                </p>
+              )}
             </div>
             {isAdmin && (
               <div className="flex gap-2">

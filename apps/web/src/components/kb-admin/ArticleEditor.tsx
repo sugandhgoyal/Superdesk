@@ -16,7 +16,7 @@ export function ArticleEditor({
   workspaceSlug: string;
   sections: AdminSection[];
   article: AdminArticleFull | null;
-  onSaved: () => void;
+  onSaved: (saved: AdminArticleFull) => void;
   onDeleted: () => void;
   onClose: () => void;
 }) {
@@ -38,20 +38,34 @@ export function ArticleEditor({
     setSubmitting(true);
     setError(null);
     try {
-      const body = {
-        title,
-        sectionId: sectionId || null,
-        excerpt: excerpt || undefined,
-        markdown,
-        ...(nextStatus ? { status: nextStatus } : {}),
-      };
+      const body = { title, sectionId: sectionId || null, excerpt: excerpt || undefined, markdown };
+      let saved: AdminArticleFull;
+
       if (article) {
-        await api(`${base}/${article.id}`, { method: 'PATCH', body });
+        // An existing article: one PATCH, status included, does it all.
+        saved = await api<AdminArticleFull>(`${base}/${article.id}`, {
+          method: 'PATCH',
+          body: { ...body, ...(nextStatus ? { status: nextStatus } : {}) },
+        });
       } else {
-        await api(`${base}`, { method: 'POST', body });
+        // A brand-new article has no id yet, so status can't ride along on
+        // the create call — the create endpoint's schema doesn't accept one
+        // (an article is always born a draft). Publishing a new article is
+        // therefore create-then-patch: two real requests, not a status field
+        // silently ignored by the first one, which is what "Publish" was
+        // actually doing before this fix — the article saved as a draft
+        // every time, regardless of which button was clicked.
+        saved = await api<AdminArticleFull>(base, { method: 'POST', body });
+        if (nextStatus) {
+          saved = await api<AdminArticleFull>(`${base}/${saved.id}`, {
+            method: 'PATCH',
+            body: { status: nextStatus },
+          });
+        }
       }
-      if (nextStatus) setStatus(nextStatus);
-      onSaved();
+
+      setStatus(saved.status);
+      onSaved(saved);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to save');
     } finally {
