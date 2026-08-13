@@ -206,11 +206,95 @@ async function seedConversations(slug, inboundAlias) {
   return c1;
 }
 
+/**
+ * A longer, multi-turn conversation specifically to demo AI summarization
+ * against something with actual substance — a one-liner doesn't show what
+ * the feature is for. Ends by calling the real summarize endpoint (an
+ * actual Claude call, not a canned example) so a summary already exists
+ * when someone opens it, rather than an empty "Generate" prompt.
+ */
+async function seedLongConversation(slug, inboundAlias) {
+  const inbound = await simulateInboundEmail({
+    inboundAlias,
+    from: 'morgan@example.com',
+    fromName: 'Morgan Blake',
+    subject: 'Data migration stuck',
+    text: "Hi, we just upgraded to the Team plan and I'm trying to migrate our workspace data from the old account, but the import has been stuck at \"Processing\" for over an hour. Can you help?",
+  });
+  const id = inbound.conversationId;
+
+  const turns = [
+    {
+      isPrivateNote: true,
+      bodyText:
+        "Checked the backend — the import job is stuck in queue, looks like it's waiting on a stale lock from a previous failed attempt.",
+    },
+    {
+      bodyText:
+        "Hi Morgan, thanks for reaching out — sorry about the delay. I can see the import job is stuck. Could you tell me roughly how many contacts/records you're migrating? That'll help me figure out if this is a size issue or something else.",
+    },
+    {
+      inbound: true,
+      text: "Sure — around 4,200 contacts and about 900 past conversations. We tried starting the import twice, both times it got stuck around the same point.",
+    },
+    {
+      isPrivateNote: true,
+      bodyText:
+        '4,200 contacts matches a known issue: the bulk importer times out silently on large batches without chunking. Restarting with the manual chunked import instead.',
+    },
+    {
+      bodyText:
+        "Found it — with a dataset that size, the automatic importer can time out silently. I've manually restarted your migration in smaller batches on our end, which should avoid that. It'll take about 20-30 minutes to fully complete this time — I'll update you as soon as it's done.",
+    },
+    {
+      inbound: true,
+      text: "Okay, appreciate it. One more thing — will our existing team's role assignments (who's admin vs agent) carry over, or do we need to re-set those after the import finishes?",
+    },
+    {
+      bodyText:
+        "Good question — role assignments do carry over automatically as part of the import, so you shouldn't need to redo them. I'll confirm that specifically once the migration finishes and let you know either way.",
+    },
+    {
+      inbound: true,
+      text: 'The import finished and everything looks right, including the roles. Thanks so much for sorting this out quickly!',
+    },
+    {
+      bodyText: "Fantastic, glad it's all sorted! Let us know if anything looks off as your team starts using it. Have a great day!",
+    },
+  ];
+
+  for (const turn of turns) {
+    if (turn.inbound) {
+      await simulateInboundEmail({
+        inboundAlias,
+        from: 'morgan@example.com',
+        fromName: 'Morgan Blake',
+        subject: 'Re: Data migration stuck',
+        text: turn.text,
+      });
+    } else {
+      await api(`/api/w/${slug}/conversations/${id}/messages`, {
+        method: 'POST',
+        body: { bodyText: turn.bodyText, isPrivateNote: turn.isPrivateNote ?? false },
+      });
+    }
+  }
+
+  await api(`/api/w/${slug}/conversations/${id}/resolve`, { method: 'POST', body: {} });
+
+  console.log('Seeded 1 long conversation (9 turns, resolved) — generating its AI summary now…');
+  const summary = await api(`/api/w/${slug}/conversations/${id}/summarize`, { method: 'POST', body: {} });
+  console.log(summary.degraded ? '  (AI unavailable — used the extractive fallback)' : '  Summary generated.');
+
+  return id;
+}
+
 async function main() {
   console.log(`Seeding demo data against ${BASE_URL}`);
   const { slug, inboundAlias } = await ensureDemoAccount();
   await seedKb(slug);
   const firstConversationId = await seedConversations(slug, inboundAlias);
+  const longConversationId = await seedLongConversation(slug, inboundAlias);
 
   console.log('\nDone.');
   console.log(`  Login:      ${EMAIL} / ${PASSWORD}`);
@@ -218,6 +302,7 @@ async function main() {
   console.log(`  Help center: ${BASE_URL}/help/${slug}`);
   console.log(`  Widget demo: ${BASE_URL}/demo?ws=${slug}`);
   console.log(`  Try the AI summary on: ${BASE_URL}/w/${slug}/inbox (open the first conversation, id ${firstConversationId})`);
+  console.log(`  Already-summarized long conversation: ${BASE_URL}/w/${slug}/inbox (id ${longConversationId}, under Resolved)`);
 }
 
 main().catch((err) => {
