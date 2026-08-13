@@ -147,6 +147,66 @@ export function parseGenericJson(body: Record<string, unknown>): ParsedInboundEm
   };
 }
 
+type ResendReceivedEmail = {
+  from: string;
+  to: string[];
+  subject: string;
+  html: string | null;
+  text: string | null;
+  headers: Record<string, string | undefined>;
+  message_id: string;
+};
+
+/**
+ * Resend's `email.received` webhook carries only metadata — from/to/subject,
+ * not the body or headers ("webhooks do not include the email body,
+ * headers, or attachments, only their metadata" per their docs). Getting
+ * anything to actually process means a follow-up GET to their Receiving API
+ * using the `email_id` the webhook handed us, authenticated with our own
+ * API key — a real network call inside what's otherwise a pure parsing
+ * function, unlike parseMailgunForm/parseGenericJson above. Returns null
+ * for any event type other than email.received (Resend can be configured to
+ * send others to the same endpoint) so the route can just acknowledge and
+ * skip rather than fail on something that isn't an email at all.
+ */
+export async function parseResendWebhook(payload: unknown): Promise<ParsedInboundEmail | null> {
+  if (
+    typeof payload !== 'object' ||
+    payload === null ||
+    (payload as { type?: unknown }).type !== 'email.received'
+  ) {
+    return null;
+  }
+
+  const data = (payload as { data?: { email_id?: unknown } }).data;
+  const emailId = typeof data?.email_id === 'string' ? data.email_id : null;
+  if (!emailId) return null;
+
+  const res = await fetch(`https://api.resend.com/emails/receiving/${emailId}`, {
+    headers: { Authorization: `Bearer ${serverEnv().RESEND_API_KEY}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) {
+    throw new Error(`Resend receiving API returned ${res.status} for email ${emailId}`);
+  }
+  const email = (await res.json()) as ResendReceivedEmail;
+
+  const { email: from, name: fromName } = parseEmailAddress(email.from);
+
+  return {
+    providerMessageId: emailId,
+    from,
+    fromName,
+    to: email.to[0] ?? '',
+    subject: email.subject || '(no subject)',
+    html: email.html ?? undefined,
+    text: email.text ?? undefined,
+    messageId: email.headers['message-id'] ?? email.message_id ?? undefined,
+    inReplyTo: email.headers['in-reply-to'] ?? undefined,
+    references: splitReferences(email.headers['references']),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Processing
 // ---------------------------------------------------------------------------
