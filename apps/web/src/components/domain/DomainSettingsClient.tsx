@@ -33,14 +33,18 @@ export function DomainSettingsClient({
 }) {
   const [info, setInfo] = useState(initialInfo);
   const [domainInput, setDomainInput] = useState('');
-  const [busy, setBusy] = useState(false);
+  // Which single action is in flight, if any — not one shared boolean.
+  // Three buttons (Connect, Check status, Disconnect) each need their own
+  // spinner; a shared flag lit all of them up for whichever one you actually
+  // clicked.
+  const [pending, setPending] = useState<'add' | 'check' | 'remove' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const base = `/api/w/${workspaceSlug}/domain`;
 
   async function addDomain(e: React.FormEvent) {
     e.preventDefault();
-    setBusy(true);
+    setPending('add');
     setError(null);
     try {
       const result = await api<DomainInfo>(base, { method: 'POST', body: { domain: domainInput } });
@@ -49,12 +53,12 @@ export function DomainSettingsClient({
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to add domain');
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   }
 
   async function checkStatus() {
-    setBusy(true);
+    setPending('check');
     setError(null);
     try {
       const result = await api<DomainInfo>(`${base}/verify`, { method: 'POST', body: {} });
@@ -62,7 +66,7 @@ export function DomainSettingsClient({
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to check status');
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   }
 
@@ -70,7 +74,7 @@ export function DomainSettingsClient({
     if (!confirm(`Disconnect ${info.customDomain}? The help center will only be reachable at /help/${workspaceSlug} again.`)) {
       return;
     }
-    setBusy(true);
+    setPending('remove');
     setError(null);
     try {
       await api(base, { method: 'DELETE' });
@@ -78,7 +82,7 @@ export function DomainSettingsClient({
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to remove domain');
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   }
 
@@ -108,7 +112,7 @@ export function DomainSettingsClient({
                 required
               />
             </Field>
-            <Button type="submit" loading={busy}>
+            <Button type="submit" loading={pending === 'add'}>
               Connect domain
             </Button>
           </form>
@@ -129,10 +133,24 @@ export function DomainSettingsClient({
             </div>
             {isAdmin && (
               <div className="flex gap-2">
-                <Button type="button" variant="secondary" size="sm" loading={busy} onClick={checkStatus}>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  loading={pending === 'check'}
+                  disabled={pending !== null && pending !== 'check'}
+                  onClick={checkStatus}
+                >
                   Check status
                 </Button>
-                <Button type="button" variant="danger" size="sm" loading={busy} onClick={remove}>
+                <Button
+                  type="button"
+                  variant="danger"
+                  size="sm"
+                  loading={pending === 'remove'}
+                  disabled={pending !== null && pending !== 'remove'}
+                  onClick={remove}
+                >
                   Disconnect
                 </Button>
               </div>
