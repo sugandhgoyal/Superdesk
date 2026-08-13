@@ -176,11 +176,28 @@ export function DomainSettingsClient({
           {info.status !== 'ACTIVE' && (
             <div className="mt-4 border-t border-border pt-4">
               <p className="text-sm font-medium text-fg">Add this DNS record at your registrar:</p>
-              <div className="mt-2 overflow-x-auto rounded-lg border border-border bg-bg-inset p-3 font-mono text-xs text-fg">
-                <div>Type: {info.target.type}</div>
-                <div>Name: {info.customDomain}</div>
-                <div>Value: {info.target.value}</div>
-              </div>
+              {info.target.type === 'A' ? (
+                <div className="mt-2 overflow-x-auto rounded-lg border border-border bg-bg-inset p-3 font-mono text-xs text-fg">
+                  <div>Type: A</div>
+                  <div>Name: @ (or leave blank — this is your root domain)</div>
+                  {info.target.values.map((ip) => (
+                    <div key={ip}>Value: {ip}</div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-2 overflow-x-auto rounded-lg border border-border bg-bg-inset p-3 font-mono text-xs text-fg">
+                  <div>Type: CNAME</div>
+                  <div>Name: {info.customDomain}</div>
+                  <div>Value: {info.target.value}</div>
+                </div>
+              )}
+              {info.target.type === 'A' && (
+                <p className="mt-1.5 text-xs text-fg-subtle">
+                  Root domains (no www/subdomain prefix) can&apos;t use a CNAME record — that&apos;s a DNS
+                  rule, not a registrar limitation. An A record pointing at the IP above is the standard
+                  way to point a root domain at Vercel.
+                </p>
+              )}
 
               {info.verification.map((v, i) => (
                 <div key={i} className="mt-2 overflow-x-auto rounded-lg border border-border bg-bg-inset p-3 font-mono text-xs text-fg">

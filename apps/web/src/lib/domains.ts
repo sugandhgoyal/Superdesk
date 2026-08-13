@@ -31,6 +31,7 @@ import { logger } from '@superdesk/shared/logger';
 
 const DOMAIN_RE = /^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$/i;
 const DEFAULT_CNAME_TARGET = 'cname.vercel-dns.com';
+const DEFAULT_APEX_IPS = ['76.76.21.21'];
 
 export type DomainVerificationRecord = {
   type: string;
@@ -39,14 +40,38 @@ export type DomainVerificationRecord = {
   reason?: string;
 };
 
+export type DnsTarget = { type: 'A'; values: string[] } | { type: 'CNAME'; value: string };
+
 export type DomainInfo = {
   customDomain: string | null;
   status: 'PENDING' | 'VERIFYING' | 'ACTIVE' | 'FAILED';
   verifiedAt: string | null;
   lastError: string | null;
   verification: DomainVerificationRecord[];
-  target: { type: 'CNAME'; value: string };
+  target: DnsTarget;
 };
+
+/**
+ * Whether `domain` is a bare root domain (sugandhgoyal.xyz) rather than a
+ * subdomain (help.sugandhgoyal.xyz) — the two need different DNS record
+ * types. A CNAME can't legally exist at a zone's apex (RFC 1034 §3.6.2 — the
+ * apex also needs NS/SOA records, and a name can't have a CNAME alongside
+ * anything else); an A record pointing at Vercel's IP is the standard
+ * workaround, and what registrars that don't offer ALIAS/ANAME/CNAME-
+ * flattening require. This was the actual cause of a domain sitting on
+ * "Verifying" indefinitely: this function didn't exist yet, so every domain
+ * was shown CNAME instructions regardless — for a root domain, at most
+ * registrars (GoDaddy included) there's no way to even create that record.
+ *
+ * Heuristic, not exact: counts labels, so it's wrong for a public-suffix
+ * domain like "co.uk" (would call "example.co.uk" a 3-label subdomain when
+ * it's actually a 2-label-effective apex). Fine for the common single-label
+ * TLDs (.com, .xyz, .app, ...) this matters most for; a full public-suffix
+ * list is the correct fix if that ever bites.
+ */
+function isApexDomain(domain: string): boolean {
+  return domain.split('.').length === 2;
+}
 
 function vercelHeaders(): Record<string, string> {
   return { Authorization: `Bearer ${serverEnv().VERCEL_API_TOKEN}`, 'Content-Type': 'application/json' };
@@ -68,7 +93,11 @@ function requireConfigured(): void {
 }
 
 type DomainDetail = { verified?: boolean; verification?: DomainVerificationRecord[] };
-type DomainConfig = { misconfigured?: boolean; recommendedCNAME?: { rank: number; value: string }[] };
+type DomainConfig = {
+  misconfigured?: boolean;
+  recommendedCNAME?: { rank: number; value: string }[];
+  recommendedIPv4?: { rank: number; value: string[] }[];
+};
 
 async function fetchDomainDetail(domain: string): Promise<DomainDetail | null> {
   const res = await fetch(vercelUrl(`/v9/projects/${serverEnv().VERCEL_PROJECT_ID}/domains/${domain}`), {
@@ -124,7 +153,10 @@ export async function getDomainInfo(scope: Scope): Promise<DomainInfo> {
   });
 
   let verification: DomainVerificationRecord[] = [];
-  let target = { type: 'CNAME' as const, value: DEFAULT_CNAME_TARGET };
+  const apex = workspace.customDomain ? isApexDomain(workspace.customDomain) : false;
+  let target: DnsTarget = apex
+    ? { type: 'A', values: DEFAULT_APEX_IPS }
+    : { type: 'CNAME', value: DEFAULT_CNAME_TARGET };
 
   if (workspace.customDomain && features().customDomains && workspace.customDomainStatus !== 'ACTIVE') {
     // Best-effort — if Vercel is unreachable, the admin still sees whatever
@@ -134,8 +166,14 @@ export async function getDomainInfo(scope: Scope): Promise<DomainInfo> {
       fetchDomainConfig(workspace.customDomain).catch(() => null),
     ]);
     verification = detail?.verification ?? [];
-    const recommended = config?.recommendedCNAME?.[0]?.value;
-    if (recommended) target = { type: 'CNAME', value: recommended.replace(/\.$/, '') };
+
+    // Vercel's config response always offers both — which one is actually
+    // usable depends on whether this is a root domain or a subdomain.
+    if (apex && config?.recommendedIPv4?.[0]?.value.length) {
+      target = { type: 'A', values: config.recommendedIPv4[0].value };
+    } else if (!apex && config?.recommendedCNAME?.[0]?.value) {
+      target = { type: 'CNAME', value: config.recommendedCNAME[0].value.replace(/\.$/, '') };
+    }
   }
 
   return {
